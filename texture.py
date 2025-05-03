@@ -20,10 +20,11 @@ class TextureCache:
         return None
 
     def add(self, key, tex_id, size):
-        """Adiciona textura ao cache com gerenciamento automático de tamanho"""
+        """Add texture to cache with automatic size management"""
         if self.current_size + size > self.max_size:
+            print("[TextureCache]: Cache size exceeded. Cleaning up...")
             self._cleanup()
-        
+
         self.cache[key] = {
             'id': tex_id,
             'size': size,
@@ -31,9 +32,11 @@ class TextureCache:
         }
         self.current_size += size
         self.access_counter += 1
+        print(f"[TextureCache]: Added texture '{key}' to cache. Current size: {self.current_size} bytes.")
 
     def _cleanup(self):
-        """Remove as texturas menos usadas recentemente"""
+        """Remove least recently used textures"""
+        print("[TextureCache]: Cleaning up least recently used textures.")
         entries = sorted(self.cache.items(), key=lambda x: x[1]['last_used'])
         for key, entry in entries[:len(entries)//2]:
             self._remove(key)

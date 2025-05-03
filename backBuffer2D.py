@@ -108,7 +108,7 @@ class BackBuffer2D:
 
     def draw_img(self, image_obj, x, y, angle=0.0, scale=1.0, alpha=1.0, layer=LAYER_OBJECTS):
         if not image_obj or not image_obj.is_valid():
-            print("Aviso: Tentando desenhar imagem inválida")
+            print("[Warning][BackBuffer2D]: Attempting to draw an invalid image.")
             return
 
         self.add_draw_call(
@@ -162,3 +162,5 @@ class BackBuffer2D:
             scale_y=scale_y,
             fill = fill
         ))
+
+        print(f"[BackBuffer2D]: Added draw call of type '{draw_type}' to layer {layer}.")

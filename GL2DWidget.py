@@ -3,114 +3,272 @@ from PyQt5.QtGui import *
 from PyQt5.QtCore import *
 from OpenGL.GL import *
 from OpenGL.GL import shaders
+
 from backBuffer2D import * 
 from texture    import *
 
 
-
 class GL2DWidget(QOpenGLWidget):
     '''
-        Widget baseado em QOpenGLWidget que simula uma superfície de renderização similar ao Pygame,
-        permitindo renderização customizada com OpenGL para objetos 2D, incluindo imagens, formas geométricas
-        e elementos gráficos simulados.
+    A QOpenGLWidget-based rendering surface that simulates a Pygame-like drawing environment,
+    enabling custom OpenGL-based 2D rendering for objects such as images, geometric shapes,
+    and simulated graphic elements.
 
-        Este componente é ideal para sistemas de simulação visual como VSSS, permitindo controle total
-        sobre o desenho de elementos com alto desempenho.
+    This component is well-suited for visual simulation systems like VSSS, providing full
+    control over rendering with high performance.
 
-        Atributos:
-            width (int): Largura do widget.
-            height (int): Altura do widget.
-            image (Image): Objeto de imagem usado para renderização básica (pode ser substituído).
-            timer (QTimer): Timer responsável por atualizar o renderizador a cada frame.
+    Attributes:
+        width (int): The width of the widget.
+        height (int): The height of the widget.
+        image (Image): An image object used for basic rendering (can be overridden).
+        timer (QTimer): Timer responsible for triggering frame updates.
 
-        Métodos:
-            initializeGL(): Configura o contexto OpenGL inicial.
-            resizeGL(w, h): Ajusta o viewport e a projeção ao redimensionar a janela.
-            paintGL(): Método principal de renderização (equivalente ao loop do Pygame).
-            keyPressEvent(event): Captura eventos de teclado (exemplo de interação).
+    Methods:
+        initializeGL(): Sets up the initial OpenGL context.
+        resizeGL(w, h): Adjusts the viewport and projection when the window is resized.
+        paintGL(): Main rendering method (acts like the Pygame main loop).
+        keyPressEvent(event): Handles keyboard events (example of input interaction).
     '''
 
     def __init__(self, parent=None, width=None, height=None):
         '''
-            Inicializa o widget, define largura e altura, carrega a imagem e configura um timer para atualização.
+            Initializes the widget, sets the width and height, loads the initial image,
+            and configures the timer for regular updates.
 
             Args:
-                parent (QWidget): Widget pai.
-                width (int): Largura opcional do widget.
-                height (int): Altura opcional do widget.
+                parent (QWidget): Optional parent widget.
+                width (int): Optional width of the widget.
+                height (int): Optional height of the widget.
         '''
-        print("[GL2DWidget]: Inicializando Widget.")
+        print("[GL2DWidget]: Initializing widget.")
         super().__init__(parent)
 
-        # Definição de tamanhos com base no widget pai ou valores padrões
+        # Set view Dimensions
         self.view_width = max(1, width) if width is not None else 800
         self.view_height = max(1, height) if height is not None else 600
         self.setMinimumSize(self.view_width, self.view_height)
 
-        # Dados internos
+        # Initialize data structures
         self.back_buffer = BackBuffer2D()
         self.texture_cache = TextureCache(max_size_mb=50)
 
-        # Framebuffers objects
+        # Framebuffer objects
         self.main_fbo = None 
         self.render_fbo = None 
-        # Interação
+
+        # Interaction
         self.click_position = None
 
-        # Variáveis internas
+        # Internal state
         self._is_initialized = False 
-        self._shader_programa =  None 
-        
-    def initializeGL(self):
-        print("[GL2DWidget]: Inicializando contexto OpenGL.")
-        glClearColor(0, 0, 0, 1)
-        glEnable(GL_BLEND)
-        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
-        self._is_initialized = True 
+        self._shader_program =  None 
 
+    def initializeGL(self):
+        print("[GL2DWidget]: Initializing OpenGL context.")
+        try:
+            # Check if the OpenGL context is valid
+            context = self.context()
+            if not context or not context.isValid():
+                raise RuntimeError("OpenGL context is not available or invalid. Ensure your system supports OpenGL.")
+
+            # Initialize OpenGL functions
+            self.gl = QOpenGLFunctions()
+            self.gl.initializeOpenGLFunctions()
+
+            # Set basic OpenGL state
+            glClearColor(0, 0, 0, 1)
+            glEnable(GL_BLEND)
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+
+            # Create framebuffer objects
+            self._create_framebuffers()
+
+            # Compile shaders
+            self._compile_shaders()
+
+            self._is_initialized = True
+            print("[GL2DWidget]: OpenGL context initialized successfully.")
+        except Exception as e:
+            print(f"[Error][initializeGL]: Failed to initialize OpenGL context: {e}")
+            self._is_initialized = False
+            self.setEnabled(False)  # Disable the widget if initialization fails
+
+    def _create_framebuffers(self):
+        """Create the main and render framebuffer objects"""
+        try:
+            if not QOpenGLFramebufferObject.hasOpenGLFramebufferObjects():
+                raise RuntimeError("FBOs not supported on this system")
+
+            # Delete existing FBOs if they exist
+            if self.main_fbo:
+                self.main_fbo.release()
+                del self.main_fbo
+
+            if self.render_fbo:
+                self.render_fbo.release()
+                del self.render_fbo
+
+            # Create new FBOs with current size
+            size = self.size() * self.devicePixelRatio()
+            format = QOpenGLFramebufferObjectFormat()
+            format.setAttachment(QOpenGLFramebufferObject.CombinedDepthStencil)
+            format.setSamples(4)  # Enable multisampling
+
+            self.main_fbo = QOpenGLFramebufferObject(size.width(), size.height(), format)
+            self.render_fbo = QOpenGLFramebufferObject(size.width(), size.height())
+
+            if not self.main_fbo.isValid() or not self.render_fbo.isValid():
+                raise RuntimeError("Failed to create framebuffer objects")
+
+            print("[GL2DWidget]: Framebuffer objects created successfully.")
+        except Exception as e:
+            print(f"[Error][_create_framebuffers]: {e}")
+
+    def _compile_shaders(self):
+        """Compile basic shaders for rendering"""
+        try:
+            vertex_shader = """
+            #version 330 core
+            layout (location = 0) in vec2 position;
+            layout (location = 1) in vec2 texCoord;
+            layout (location = 2) in vec4 color;
+            
+            out vec2 TexCoord;
+            out vec4 Color;
+            
+            uniform mat4 projection;
+            
+            void main()
+            {
+                gl_Position = projection * vec4(position, 0.0, 1.0);
+                TexCoord = texCoord;
+                Color = color;
+            }
+            """
+            
+            fragment_shader = """
+            #version 330 core
+            in vec2 TexCoord;
+            in vec4 Color;
+            out vec4 FragColor;
+            
+            uniform sampler2D texture1;
+            uniform bool useTexture;
+            
+            void main()
+            {
+                if (useTexture) {
+                    FragColor = texture(texture1, TexCoord) * Color;
+                } else {
+                    FragColor = Color;
+                }
+            }
+            """
+            
+            try:
+                self._shader_program = shaders.compileProgram(
+                    shaders.compileShader(vertex_shader, GL_VERTEX_SHADER),
+                    shaders.compileShader(fragment_shader, GL_FRAGMENT_SHADER)
+                )  # Faltava este parêntese
+            except Exception as e:
+                print(f"Error compiling shaders: {e}")
+                self._shader_program = None
+                # Pode adicionar um fallback para shaders simples aqui
+            print("[GL2DWidget]: Shaders compiled successfully.")
+        except Exception as e:
+            print(f"[Error][_compile_shaders]: Failed to compile shaders: {e}")
+            self._shader_program = None
+            
     def paintGL(self):
         if not self._is_initialized:
+            print("[Error][paintGL]: OpenGL context is not initialized. Skipping paintGL.")
             return
-
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
-
+            
         try:
+            # First render to our FBO
+            self.main_fbo.bind()
+            
+            # Clear the FBO
+            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
+            
+            # Process all draw calls
             sorted_calls = sorted(self.back_buffer.get_calls(), key=lambda call: call.layer)
             for call in sorted_calls:
                 self._process_draw_call(call)
+            
+            # Release the FBO
+            self.main_fbo.release()
+            
+            # Now render the FBO to screen
+            self._render_fbo_to_screen()
+            print("[GL2DWidget]: Frame rendered successfully.")
+            
         except Exception as e:
-            print(f"[Erro][paintGL]: {e}")
+            print(f"[Error][paintGL]: {e}")
+            self._check_gl_error("paintGL")
 
 
     def resizeGL(self, w, h):
-        print(f"[GL2DWidget]: Redimensionando para {w}x{h}")
-        glViewport(0, 0, w, h)
+        try:
+            print(f"[GL2DWidget]: Resizing to {w}x{h}")
+            
+            # Update view dimensions
+            self.view_width = w
+            self.view_height = h
+            
+            # Recreate framebuffers with new size
+            self._create_framebuffers()
+            
+            # Set viewport and projection
+            glViewport(0, 0, w, h)
+            
+            # Update projection matrix
+            if self._shader_program:
+                glUseProgram(self._shader_program)
+                projection = QMatrix4x4()
+                projection.ortho(0, w, h, 0, -1, 1)
+                loc = glGetUniformLocation(self._shader_program, "projection")
+                glUniformMatrix4fv(loc, 1, GL_FALSE, projection.data())
+                glUseProgram(0)
+            print("[GL2DWidget]: Resize completed successfully.")
+        except Exception as e:
+            print(f"[Error][resizeGL]: {e}")
+
+    def _render_fbo_to_screen(self):
+        """Render the main FBO to the screen"""
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
+        
+        # Bind the main FBO's texture
+        glBindTexture(GL_TEXTURE_2D, self.main_fbo.texture())
+        
+        # Set up for rendering a full-screen quad
         glMatrixMode(GL_PROJECTION)
         glLoadIdentity()
-        glOrtho(0, w, h, 0, -1, 1)
+        glOrtho(0, self.width(), self.height(), 0, -1, 1)
         glMatrixMode(GL_MODELVIEW)
         glLoadIdentity()
-        self.view_width = w
-        self.view_height = h
+        
+        # Render the texture
+        glEnable(GL_TEXTURE_2D)
+        glBegin(GL_QUADS)
+        glTexCoord2f(0, 0); glVertex2f(0, 0)
+        glTexCoord2f(1, 0); glVertex2f(self.width(), 0)
+        glTexCoord2f(1, 1); glVertex2f(self.width(), self.height())
+        glTexCoord2f(0, 1); glVertex2f(0, self.height())
+        glEnd()
+        glDisable(GL_TEXTURE_2D)
 
     ## ====== Lógica de desenhos e sistema de layers ===
     def render_to_back_buffer(self):
         if not self._is_initialized:
-            print("[render_to_back_buffer]: Widget ainda não inicializado.")
+            print("[render_to_back_buffer]: Widget not initialized.")
             return
 
-        if not hasattr(self, 'back_buffer'):
-            print("[render_to_back_buffer]: Back buffer não inicializado.")
-            return
-        
         self.makeCurrent()
         try:
-            w = max(1, self.view_width)
-            h = max(1, self.view_height)
-
-            # Usa framebuffer padrão (0)
-            glBindFramebuffer(GL_FRAMEBUFFER, 0)
-            glViewport(0, 0, w, h)
+            # Use o FBO principal
+            self.main_fbo.bind()
+            glViewport(0, 0, self.view_width, self.view_height)
 
             glClearColor(0.2, 0.2, 0.2, 1.0)
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
@@ -120,10 +278,13 @@ class GL2DWidget(QOpenGLWidget):
                 try:
                     self._process_draw_call(call)
                 except Exception as e:
-                    print(f"[Erro][render_to_back_buffer]: Erro ao processar chamada de desenho: {e}")
+                    print(f"[Error][render_to_back_buffer]: Error processing draw call: {e}")
+
+            self.main_fbo.release()
+            self.update()  # Força a atualização do widget
 
         except Exception as e:
-            print(f"[GL Error][render_to_back_buffer]: Erro durante render_to_back_buffer: {e}")
+            print(f"[GL Error][render_to_back_buffer]: Error during render: {e}")
             self._check_gl_error("render_to_back_buffer")
         finally:
             self.doneCurrent()
@@ -165,6 +326,7 @@ class GL2DWidget(QOpenGLWidget):
             
             else:
                 print(f"[Aviso][_process_draw_call]: Tipo de draw_call desconhecido: {call.draw_type}")
+            print(f"[GL2DWidget]: Processed draw call of type '{call.draw_type}' on layer {call.layer}.")
         except Exception as e:
             print(f"[Erro][_process_draw_call]: Erro ao processar draw call: {str(e)}")
 
@@ -184,6 +346,7 @@ class GL2DWidget(QOpenGLWidget):
             return 
         self.render_to_back_buffer()
         self.update_widget()
+
     ## ====== FUNÇÕES DE RENDERIZAÇÃO =========
     ## ==== Classes básicas de render para desenhos primitivos
     # Substitua o método _safe_gl_render por:
@@ -596,36 +759,58 @@ class GL2DWidget(QOpenGLWidget):
     
     ## ==== Métodos de limpezad ==========
     def cleanup(self):
-        """
-        Limpeza completa de todos os recursos OpenGL, incluindo FBOs, texturas e cache
-        Versão otimizada para o novo sistema de gerenciamento de recursos
-        """
+        """Clean up all OpenGL resources"""
         if not self.isValid():
+            print("[GL2DWidget]: Widget is not valid for cleanup.")
             return
 
         self.makeCurrent()
         try:
+            # Clean up FBOs
+            if hasattr(self, 'main_fbo') and self.main_fbo:
+                self.main_fbo.release()
+                del self.main_fbo
+                
+            if hasattr(self, 'render_fbo') and self.render_fbo:
+                self.render_fbo.release()
+                del self.render_fbo
+                
+            # Clean up shaders
+            if hasattr(self, '_shader_program') and self._shader_program:
+                glDeleteProgram(self._shader_program)
+                self._shader_program = None
+            
+            # Limpe todas as texturas do cache
+            for entry in list(self.texture_cache.cache.values()):
+                if glIsTexture(entry['id']):
+                    glDeleteTextures([entry['id']])
 
-            # 2. Limpeza do sistema de cache unificado
+            # Clean up texture cache
             if hasattr(self, 'texture_cache'):
-                # Limpa todas as texturas do cache
                 self.texture_cache.cache.clear()
                 self.texture_cache.current_size = 0
-
-            # 3. Limpeza adicional de recursos (se necessário)
+                
+            # Clear back buffer
             if hasattr(self, 'back_buffer'):
                 self.back_buffer.clear()
-
-            # 4. Forçar liberação de recursos da GPU
+                
             glFlush()
             glFinish()
-
+            
         except Exception as e:
-            print(f"Erro durante cleanup: {e}")
-            # Não relançar a exceção para evitar problemas no destrutor
+            print(f"Error during cleanup: {e}")
         finally:
             self.doneCurrent()
-            self._is_initialized = False  # Marca como não inicializado
+            self._is_initialized = False
+        print("[GL2DWidget]: Cleanup completed successfully.")
+
+    def _check_gl_error(self, context=""):
+        """Utility function to check for OpenGL errors"""
+        error = glGetError()
+        if error != GL_NO_ERROR:
+            print(f"OpenGL error in {context}: {error}")
+            return True
+        return False
 
     def closeEvent(self,event):
         '''

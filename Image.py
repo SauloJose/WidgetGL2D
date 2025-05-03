@@ -13,12 +13,14 @@ class Image:
             sy = sx
         new_size = (int(self.original.width * sx), int(self.original.height * sy))
         self.transformed = self.original.resize(new_size, PILImage.ANTIALIAS)
-        self._qimage_cache = None  # Invalida o cache
+        self._qimage_cache = None  # Invalidate cache
+        print(f"[Image]: Scaled image to size {new_size}.")
         return self
 
     def rotate(self, angle):
         self.transformed = self.transformed.rotate(angle, expand=True)
         self._qimage_cache = None
+        print(f"[Image]: Rotated image by {angle} degrees.")
         return self
 
     def flip(self, horizontal=False, vertical=False):
@@ -27,6 +29,7 @@ class Image:
         if vertical:
             self.transformed = ImageOps.flip(self.transformed)
         self._qimage_cache = None
+        print(f"[Image]: Flipped image. Horizontal: {horizontal}, Vertical: {vertical}.")
         return self
 
     def to_qimage(self):
